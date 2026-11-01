@@ -1,0 +1,38 @@
+[package]
+name = "vocalist"
+version = "2.0.0"
+edition = "2021"
+description = "Vocalist - voce sintetica per meditazioni e narrazioni (Piper, Edge, Google)"
+authors = ["Lorenzo D'Apolito"]
+license = "MIT"
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+hound = "3.5"
+symphonia = { version = "0.6", default-features = false, features = ["mp3", "wav", "pcm"] }
+rodio = { version = "0.23", default-features = false, features = ["playback"], optional = true }
+ureq = "3"
+msedge-tts = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+chrono = "0.4"
+base64 = "0.22"
+
+[features]
+default = ["audio-out"]
+# Riproduzione integrata (su Linux richiede libasound2-dev per compilare).
+audio-out = ["dep:rodio"]
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -612,6 +612,7 @@ impl App {
         while let Ok(ev) = self.ev_rx.try_recv() {
             match ev {
                 Event::Progress { ok, total, eta } => {
+                    self.logger.info(format!("Segmento {ok}/{total} elaborato"));
                     if total > 0 {
                         self.progress = ok as f32 / total as f32;
                     }

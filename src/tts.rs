@@ -278,30 +278,75 @@ impl TtsEngine for EdgeEngine {
         params: &EngineParams,
     ) -> Result<(), TtsError> {
         let config = msedge_tts::tts::SpeechConfig {
-            voice_name: edge_voice_id(&params.edge_voice),
+            voice_name: edge_ssml_voice_name(&edge_voice_id(&params.edge_voice)),
             audio_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
             pitch: 0,
             rate: edge_rate_percent(params.speed),
             volume: 0,
         };
-        let wrap = |e: String| {
-            if looks_like_network_error(&e) {
-                TtsError::Network(format!("Errore di rete Edge TTS: {e}"))
-            } else {
-                TtsError::Synthesis(format!("Edge TTS fallito: {e}"))
+        let escaped = xml_escape(text);
+        let mut last_err = TtsError::Synthesis("Edge TTS: nessun tentativo".into());
+        // Fino a due tentativi, ciascuno con un limite di tempo: se il servizio non risponde,
+        // la lettura del socket resterebbe altrimenti in attesa per sempre.
+        for _attempt in 0..2 {
+            match edge_attempt(escaped.clone(), config.clone(), EDGE_TIMEOUT) {
+                Ok(bytes) => {
+                    return std::fs::write(output, &bytes)
+                        .map_err(|e| TtsError::Synthesis(format!("Edge TTS: {e}")));
+                }
+                Err(e) => last_err = e,
             }
-        };
-        let mut client = msedge_tts::tts::client::connect().map_err(|e| wrap(e.to_string()))?;
-        let audio = client
-            .synthesize(&xml_escape(text), &config)
-            .map_err(|e| wrap(e.to_string()))?;
-        if audio.audio_bytes.is_empty() {
-            return Err(TtsError::Synthesis(
-                "Edge TTS: nessun audio ricevuto".into(),
-            ));
         }
-        std::fs::write(output, &audio.audio_bytes)
-            .map_err(|e| TtsError::Synthesis(format!("Edge TTS: {e}")))
+        Err(last_err)
+    }
+}
+
+const EDGE_TIMEOUT: Duration = Duration::from_secs(40);
+
+/// Nome della voce come lo vuole l'SSML: `Microsoft Server Speech Text to Speech Voice (it-IT, IsabellaNeural)`.
+pub fn edge_ssml_voice_name(id: &str) -> String {
+    let mut parts = id.splitn(3, '-');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(lang), Some(region), Some(name)) if !name.is_empty() => {
+            format!("Microsoft Server Speech Text to Speech Voice ({lang}-{region}, {name})")
+        }
+        _ => id.to_string(),
+    }
+}
+
+fn edge_attempt(
+    escaped_text: String,
+    config: msedge_tts::tts::SpeechConfig,
+    timeout: Duration,
+) -> Result<Vec<u8>, TtsError> {
+    let wrap = |e: String| {
+        if looks_like_network_error(&e) {
+            TtsError::Network(format!("Errore di rete Edge TTS: {e}"))
+        } else {
+            TtsError::Synthesis(format!("Edge TTS fallito: {e}"))
+        }
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let res = (|| {
+            let mut client = msedge_tts::tts::client::connect().map_err(|e| e.to_string())?;
+            let audio = client
+                .synthesize(&escaped_text, &config)
+                .map_err(|e| e.to_string())?;
+            Ok::<Vec<u8>, String>(audio.audio_bytes)
+        })();
+        let _ = tx.send(res);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(bytes)) if bytes.is_empty() => Err(TtsError::Synthesis(
+            "Edge TTS: il servizio non ha restituito audio".into(),
+        )),
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(e)) => Err(wrap(e)),
+        Err(_) => Err(TtsError::Network(format!(
+            "Edge TTS non risponde (nessuna risposta in {} secondi)",
+            timeout.as_secs()
+        ))),
     }
 }
 
@@ -503,6 +548,19 @@ mod tests {
         assert_eq!(edge_rate_percent(1.0), 0);
         assert_eq!(edge_rate_percent(1.8), 80);
         assert_eq!(edge_rate_percent(0.5), -50);
+    }
+
+    #[test]
+    fn ssml_voice_name_is_the_long_form() {
+        assert_eq!(
+            edge_ssml_voice_name("it-IT-IsabellaNeural"),
+            "Microsoft Server Speech Text to Speech Voice (it-IT, IsabellaNeural)"
+        );
+        assert_eq!(
+            edge_ssml_voice_name("zh-CN-liaoning-XiaobeiNeural"),
+            "Microsoft Server Speech Text to Speech Voice (zh-CN, liaoning-XiaobeiNeural)"
+        );
+        assert_eq!(edge_ssml_voice_name("strano"), "strano");
     }
 
     #[test]

@@ -9,6 +9,8 @@ use serde_json::Value;
 pub const PIPER_INDEX_URL: &str =
     "https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json";
 pub const PIPER_BASE_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/";
+pub const PIPER_RUNTIME_URL: &str =
+    "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip";
 pub const EDGE_CACHE_FILE: &str = "edge_voices.json";
 
 // ---------------------------------------------------------------- Edge
@@ -295,6 +297,55 @@ pub fn download_piper_voice(
     Ok(())
 }
 
+/// Estrae uno zip in `dest`, ignorando le voci con percorsi pericolosi (`..`, percorsi assoluti).
+pub fn extract_zip(
+    zip_path: &Path,
+    dest: &Path,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<usize, String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("archivio non valido: {e}"))?;
+    let mut count = 0usize;
+    for i in 0..archive.len() {
+        if is_cancelled() {
+            return Err("Installazione annullata".into());
+        }
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let Some(rel) = entry.enclosed_name() else {
+            continue;
+        };
+        let out = dest.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut f = std::fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+        std::io::copy(&mut entry, &mut f).map_err(|e| e.to_string())?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Scarica ed estrae il programma Piper (cartella `piper/` accanto al programma).
+pub fn install_piper_runtime(
+    url: &str,
+    base_dir: &Path,
+    on_progress: &mut dyn FnMut(u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<std::path::PathBuf, String> {
+    let zip_path = base_dir.join("piper_download.zip");
+    download_file(url, &zip_path, None, on_progress, is_cancelled)?;
+    let result = extract_zip(&zip_path, base_dir, is_cancelled);
+    let _ = std::fs::remove_file(&zip_path);
+    result?;
+    crate::tts::find_piper(base_dir)
+        .ok_or_else(|| "piper.exe non trovato nell'archivio scaricato".to_string())
+}
+
 /// Lingue presenti nel catalogo: (codice, nome inglese), senza doppioni.
 pub fn piper_languages(voices: &[PiperVoice]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
@@ -478,5 +529,72 @@ mod tests {
         assert!(!p.is_installed(&dir));
         std::fs::write(dir.join(p.json_file_name()), b"x").unwrap();
         assert!(p.is_installed(&dir));
+    }
+
+    fn make_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let f = std::fs::File::create(path).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        for (name, data) in entries {
+            z.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(data).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    #[test]
+    fn zip_extraction_skips_dangerous_paths() {
+        let dir = tmp("zipx");
+        let zp = dir.join("a.zip");
+        make_zip(
+            &zp,
+            &[
+                ("piper/piper.exe", b"EXE"),
+                ("piper/data/x.txt", b"X"),
+                ("../evil.txt", b"BAD"),
+            ],
+        );
+        let out = dir.join("out");
+        let n = extract_zip(&zp, &out, &|| false).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(std::fs::read(out.join("piper/piper.exe")).unwrap(), b"EXE");
+        assert!(!dir.join("evil.txt").exists());
+        assert!(extract_zip(&dir.join("manca.zip"), &out, &|| false).is_err());
+    }
+
+    #[test]
+    fn piper_runtime_is_downloaded_and_installed() {
+        let dir = tmp("rt");
+        let zp = dir.join("src.zip");
+        let exe_name = if cfg!(windows) {
+            "piper/piper.exe"
+        } else {
+            "piper/piper"
+        };
+        make_zip(
+            &zp,
+            &[(exe_name, b"EXE"), ("piper/espeak-ng-data/it", b"d")],
+        );
+        let url = serve(std::fs::read(&zp).unwrap(), 1);
+        let base = dir.join("app");
+        std::fs::create_dir_all(&base).unwrap();
+        let mut last = 0;
+        let exe = install_piper_runtime(&url, &base, &mut |b| last = b, &|| false).unwrap();
+        assert!(exe.is_file());
+        assert!(last > 0);
+        assert!(!base.join("piper_download.zip").exists());
+        assert!(base.join("piper/espeak-ng-data/it").is_file());
+    }
+
+    #[test]
+    fn piper_runtime_without_exe_is_reported() {
+        let dir = tmp("rt2");
+        let zp = dir.join("src.zip");
+        make_zip(&zp, &[("altro/file.txt", b"x")]);
+        let url = serve(std::fs::read(&zp).unwrap(), 1);
+        let base = dir.join("app");
+        std::fs::create_dir_all(&base).unwrap();
+        let err = install_piper_runtime(&url, &base, &mut |_| {}, &|| false).unwrap_err();
+        assert!(err.contains("non trovato"), "{err}");
     }
 }

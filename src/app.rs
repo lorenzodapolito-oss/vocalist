@@ -46,6 +46,8 @@ enum Event {
     EdgeVoices(Result<Vec<EdgeVoice>, String>),
     PiperIndex(Result<Vec<PiperVoice>, String>),
     PiperProgress(u64),
+    PiperRuntimeProgress(u64),
+    PiperRuntimeDone(Result<PathBuf, String>),
     PiperDone {
         key: String,
         result: Result<(), String>,
@@ -106,6 +108,9 @@ pub struct App {
     edge_loading: bool,
     edge_filter: String,
     piper_win: Option<PiperWin>,
+    /// Byte scaricati mentre si installa il programma Piper.
+    piper_rt: Option<u64>,
+    piper_rt_cancel: Arc<AtomicBool>,
 }
 
 impl App {
@@ -174,6 +179,8 @@ impl App {
             edge_loading: false,
             edge_filter: "it-IT".into(),
             piper_win: None,
+            piper_rt: None,
+            piper_rt_cancel: Arc::new(AtomicBool::new(false)),
         };
         if !app.models.is_empty() {
             app.logger
@@ -216,6 +223,31 @@ impl App {
             .iter()
             .find(|v| v.id == id)
             .map_or_else(|| id.to_string(), |v| v.label.clone())
+    }
+
+    fn start_piper_runtime_install(&mut self) {
+        if self.piper_rt.is_some() {
+            return;
+        }
+        self.piper_rt = Some(0);
+        self.piper_rt_cancel.store(false, Ordering::SeqCst);
+        let cancel = self.piper_rt_cancel.clone();
+        let tx = self.ev_tx.clone();
+        let base = self.base_dir.clone();
+        self.logger
+            .info("Scarico il programma Piper (circa 22 MB)...");
+        std::thread::spawn(move || {
+            let tx_p = tx.clone();
+            let res = voices::install_piper_runtime(
+                voices::PIPER_RUNTIME_URL,
+                &base,
+                &mut |b| {
+                    let _ = tx_p.send(Event::PiperRuntimeProgress(b));
+                },
+                &|| cancel.load(Ordering::SeqCst),
+            );
+            let _ = tx.send(Event::PiperRuntimeDone(res));
+        });
     }
 
     fn open_piper_window(&mut self) {
@@ -672,6 +704,22 @@ impl App {
                         }
                     }
                 }
+                Event::PiperRuntimeProgress(b) => self.piper_rt = Some(b),
+                Event::PiperRuntimeDone(res) => {
+                    self.piper_rt = None;
+                    match res {
+                        Ok(exe) => {
+                            self.logger
+                                .success(format!("Piper installato: {}", exe.display()));
+                            self.piper_exe = Some(exe.clone());
+                            self.engines
+                                .insert("piper", Arc::new(tts::PiperEngine { exe: Some(exe) }));
+                        }
+                        Err(e) => self
+                            .logger
+                            .error(format!("Installazione di Piper fallita: {e}")),
+                    }
+                }
                 Event::PiperProgress(b) => {
                     if let Some((_, done)) =
                         self.piper_win.as_mut().and_then(|w| w.downloading.as_mut())
@@ -788,6 +836,28 @@ impl App {
             }
             if changed {
                 self.sync_output_extension();
+            }
+            if !piper_ok && cfg!(windows) {
+                ui.add_space(4.0);
+                match self.piper_rt {
+                    Some(done) => {
+                        ui.label(
+                            RichText::new(format!("Scarico Piper... {:.1} MB", done as f64 / 1_048_576.0))
+                                .color(theme::MUTED),
+                        );
+                        if ui.button("Annulla").clicked() {
+                            self.piper_rt_cancel.store(true, Ordering::SeqCst);
+                        }
+                    }
+                    None => {
+                        if Self::big_button(ui, "Scarica Piper (programma)", theme::PRIMARY, Color32::WHITE, true, 32.0)
+                            .on_hover_text("Scarica piper.exe (circa 22 MB) nella cartella 'piper' accanto al programma")
+                            .clicked()
+                        {
+                            self.start_piper_runtime_install();
+                        }
+                    }
+                }
             }
         });
         ui.add_space(8.0);

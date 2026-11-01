@@ -237,21 +237,6 @@ impl TtsEngine for PiperEngine {
 
 pub struct EdgeEngine;
 
-pub fn xml_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 8);
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// Variazione di velocità in percentuale come la vuole Edge (`speed` 0.85 → -15).
 pub fn edge_rate_percent(speed: f64) -> i32 {
     ((speed - 1.0) * 100.0).trunc() as i32
@@ -277,19 +262,11 @@ impl TtsEngine for EdgeEngine {
         output: &Path,
         params: &EngineParams,
     ) -> Result<(), TtsError> {
-        let config = msedge_tts::tts::SpeechConfig {
-            voice_name: edge_ssml_voice_name(&edge_voice_id(&params.edge_voice)),
-            audio_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
-            pitch: 0,
-            rate: edge_rate_percent(params.speed),
-            volume: 0,
-        };
-        let escaped = xml_escape(text);
+        let voice = edge_voice_id(&params.edge_voice);
+        let rate = edge_rate_percent(params.speed);
         let mut last_err = TtsError::Synthesis("Edge TTS: nessun tentativo".into());
-        // Fino a due tentativi, ciascuno con un limite di tempo: se il servizio non risponde,
-        // la lettura del socket resterebbe altrimenti in attesa per sempre.
         for _attempt in 0..2 {
-            match edge_attempt(escaped.clone(), config.clone(), EDGE_TIMEOUT) {
+            match edge_attempt(text.to_string(), voice.clone(), rate, EDGE_TIMEOUT) {
                 Ok(bytes) => {
                     return std::fs::write(output, &bytes)
                         .map_err(|e| TtsError::Synthesis(format!("Edge TTS: {e}")));
@@ -301,22 +278,13 @@ impl TtsEngine for EdgeEngine {
     }
 }
 
-const EDGE_TIMEOUT: Duration = Duration::from_secs(40);
+const EDGE_TIMEOUT: Duration = Duration::from_secs(70);
 
-/// Nome della voce come lo vuole l'SSML: `Microsoft Server Speech Text to Speech Voice (it-IT, IsabellaNeural)`.
-pub fn edge_ssml_voice_name(id: &str) -> String {
-    let mut parts = id.splitn(3, '-');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some(lang), Some(region), Some(name)) if !name.is_empty() => {
-            format!("Microsoft Server Speech Text to Speech Voice ({lang}-{region}, {name})")
-        }
-        _ => id.to_string(),
-    }
-}
-
+/// Una richiesta di sintesi con limite di tempo (il servizio a volte tace e basta).
 fn edge_attempt(
-    escaped_text: String,
-    config: msedge_tts::tts::SpeechConfig,
+    text: String,
+    voice_id: String,
+    rate_percent: i32,
     timeout: Duration,
 ) -> Result<Vec<u8>, TtsError> {
     let wrap = |e: String| {
@@ -329,11 +297,24 @@ fn edge_attempt(
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let res = (|| {
-            let mut client = msedge_tts::tts::client::connect().map_err(|e| e.to_string())?;
-            let audio = client
-                .synthesize(&escaped_text, &config)
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
                 .map_err(|e| e.to_string())?;
-            Ok::<Vec<u8>, String>(audio.audio_bytes)
+            rt.block_on(async {
+                let client = edge_tts_rust::EdgeTtsClient::new().map_err(|e| e.to_string())?;
+                let opts = edge_tts_rust::SpeakOptions {
+                    voice: voice_id,
+                    rate: format!("{rate_percent:+}%"),
+                    output_format: "audio-24khz-48kbitrate-mono-mp3".into(),
+                    ..edge_tts_rust::SpeakOptions::default()
+                };
+                let out = client
+                    .synthesize(text, opts)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<Vec<u8>, String>(out.audio)
+            })
         })();
         let _ = tx.send(res);
     });
@@ -551,27 +532,6 @@ mod tests {
     }
 
     #[test]
-    fn ssml_voice_name_is_the_long_form() {
-        assert_eq!(
-            edge_ssml_voice_name("it-IT-IsabellaNeural"),
-            "Microsoft Server Speech Text to Speech Voice (it-IT, IsabellaNeural)"
-        );
-        assert_eq!(
-            edge_ssml_voice_name("zh-CN-liaoning-XiaobeiNeural"),
-            "Microsoft Server Speech Text to Speech Voice (zh-CN, liaoning-XiaobeiNeural)"
-        );
-        assert_eq!(edge_ssml_voice_name("strano"), "strano");
-    }
-
-    #[test]
-    fn xml_is_escaped() {
-        assert_eq!(
-            xml_escape("a & b <c> \"d\" 'e'"),
-            "a &amp; b &lt;c&gt; &quot;d&quot; &apos;e&apos;"
-        );
-    }
-
-    #[test]
     fn google_body_has_expected_shape() {
         let b = google_request_body("ciao", "it");
         assert!(b.starts_with("f.req="));
@@ -696,5 +656,26 @@ mod tests {
             vec!["a.onnx".to_string(), "models/b.ONNX".to_string()]
         );
         assert!(find_piper(&dir).is_none());
+    }
+}
+
+#[cfg(test)]
+mod edge_offline_tests {
+    use super::*;
+
+    /// Senza rete (o con rete bloccata) deve restituire un errore, senza bloccarsi né andare in panico.
+    #[test]
+    fn edge_fails_cleanly_when_service_unreachable() {
+        let t = std::time::Instant::now();
+        let r = edge_attempt(
+            "ciao".into(),
+            "it-IT-IsabellaNeural".into(),
+            -15,
+            Duration::from_secs(30),
+        );
+        if let Err(e) = r {
+            assert!(!e.to_string().is_empty());
+        }
+        assert!(t.elapsed() < Duration::from_secs(35));
     }
 }

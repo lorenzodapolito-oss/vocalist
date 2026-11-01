@@ -17,6 +17,8 @@ symphonia = { version = "0.6", default-features = false, features = ["mp3", "wav
 rodio = { version = "0.23", default-features = false, features = ["playback"], optional = true }
 ureq = "3"
 msedge-tts = "0.4"
+edge-tts-rust = "0.1"
+tokio = { version = "1", features = ["rt", "time"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 chrono = "0.4"
 base64 = "0.22"

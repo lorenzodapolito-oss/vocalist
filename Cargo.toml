@@ -18,6 +18,7 @@ rodio = { version = "0.23", default-features = false, features = ["playback"], o
 ureq = "3"
 msedge-tts = "0.4"
 edge-tts-rust = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1", features = ["rt", "time"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 chrono = "0.4"

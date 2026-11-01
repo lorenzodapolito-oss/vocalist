@@ -10,10 +10,12 @@ mod logger;
 mod player;
 mod text;
 mod theme;
+mod tls;
 mod tts;
 mod voices;
 
 fn main() -> eframe::Result {
+    tls::install_crypto_provider();
     let (w, h) = app::App::initial_window_size();
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

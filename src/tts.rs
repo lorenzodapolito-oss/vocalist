@@ -324,10 +324,13 @@ fn edge_attempt(
         )),
         Ok(Ok(bytes)) => Ok(bytes),
         Ok(Err(e)) => Err(wrap(e)),
-        Err(_) => Err(TtsError::Network(format!(
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(TtsError::Network(format!(
             "Edge TTS non risponde (nessuna risposta in {} secondi)",
             timeout.as_secs()
         ))),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(TtsError::Synthesis(
+            "Edge TTS: il processo di sintesi si è interrotto in modo imprevisto".into(),
+        )),
     }
 }
 
@@ -677,5 +680,18 @@ mod edge_offline_tests {
             assert!(!e.to_string().is_empty());
         }
         assert!(t.elapsed() < Duration::from_secs(35));
+    }
+}
+
+#[cfg(test)]
+mod crypto_tests {
+    #[test]
+    fn rustls_default_provider_can_be_installed_and_used() {
+        crate::tls::install_crypto_provider();
+        // Dopo l'installazione, costruire una configurazione TLS non deve andare in panico.
+        let cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        assert!(cfg.alpn_protocols.is_empty());
     }
 }

@@ -17,6 +17,7 @@ use crate::logger::{Filter, LogBuffer, LogLine, Logger, Tag};
 use crate::player::{open_with_default_app, AudioPlayer};
 use crate::text::{self, PronunciationMode, Segment};
 use crate::theme;
+use crate::translate::panel::TranslatePanel;
 use crate::tts::{self, EngineParams, TtsEngine};
 use crate::voices::{self, EdgeVoice, PiperVoice};
 
@@ -74,6 +75,7 @@ struct Preview {
 }
 
 pub struct App {
+    translate: TranslatePanel,
     base_dir: PathBuf,
     cfg_path: PathBuf,
     cfg: AppConfig,
@@ -148,6 +150,7 @@ impl App {
             Path::new(&cfg.output_dir).join("meditazione.wav")
         };
 
+        let translate = TranslatePanel::new(&base_dir);
         let mut app = Self {
             base_dir,
             cfg_path,
@@ -178,6 +181,7 @@ impl App {
             edge_voices: Vec::new(),
             edge_loading: false,
             edge_filter: "it-IT".into(),
+            translate,
             piper_win: None,
             piper_rt: None,
             piper_rt_cancel: Arc::new(AtomicBool::new(false)),
@@ -1453,6 +1457,9 @@ impl eframe::App for App {
                                 .color(theme::PRIMARY),
                         );
                         ui.label(RichText::new(format!("v{APP_VERSION}")).color(theme::MUTED));
+                        if ui.button("Traduttore EN → IT").clicked() {
+                            self.translate.open = true;
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let piper_ok = self.piper_exe.is_some();
                             for (ok, name) in [
@@ -1520,6 +1527,19 @@ impl eframe::App for App {
 
         self.preview_window(&ctx);
         self.piper_window(&ctx);
+        self.translate.window(&ctx, &self.text);
+        for (tag, m) in std::mem::take(&mut self.translate.msgs) {
+            match tag {
+                Tag::Error => self.logger.error(m),
+                Tag::Warning => self.logger.warn(m),
+                Tag::Success => self.logger.success(m),
+                _ => self.logger.info(m),
+            }
+        }
+        if let Some(t) = self.translate.take.take() {
+            self.text = t;
+            self.logger.success("Testo sostituito con la traduzione.");
+        }
 
         if self.generating || self.player.is_playing || self.preview.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));

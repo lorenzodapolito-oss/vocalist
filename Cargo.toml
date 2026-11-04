@@ -2,7 +2,7 @@
 name = "vocalist"
 version = "2.0.0"
 edition = "2021"
-description = "Vocalist - voce sintetica per meditazioni e narrazioni (Piper, Edge, Google)"
+description = "Vocalist - voce sintetica per meditazioni e narrazioni (Piper, Edge, Google) con traduttore EN-IT offline"
 authors = ["Lorenzo D'Apolito"]
 license = "MIT"
 
@@ -23,6 +23,14 @@ tokio = { version = "1", features = ["rt", "time"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 chrono = "0.4"
 base64 = "0.22"
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+unicode-normalization = "0.1"
+pdf-extract = "0.9"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [features]
 default = ["audio-out"]

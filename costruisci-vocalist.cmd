@@ -13,9 +13,9 @@ taskkill /f /im vocalist.exe >nul 2>&1
 
 echo === Scarico o aggiorno Vocalist ===
 if exist "%PROG%\Vocalist\.git" (
-  git -C "%PROG%\Vocalist" fetch origin
+  git -c "safe.directory=*" -C "%PROG%\Vocalist" fetch origin
   if errorlevel 1 goto fail
-  git -C "%PROG%\Vocalist" reset --hard origin/main
+  git -c "safe.directory=*" -C "%PROG%\Vocalist" reset --hard origin/main
 ) else (
   git clone https://github.com/lorenzodapolito-oss/vocalist "%PROG%\Vocalist"
 )

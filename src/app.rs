@@ -854,7 +854,7 @@ impl App {
                         }
                     }
                     None => {
-                        if Self::big_button(ui, "Scarica Piper (programma)", theme::PRIMARY, Color32::WHITE, true, 32.0)
+                        if Self::big_button(ui, "Scarica Piper (programma)", theme::PRIMARY, theme::ON_COLOR, true, 32.0)
                             .on_hover_text("Scarica piper.exe (circa 22 MB) nella cartella 'piper' accanto al programma")
                             .clicked()
                         {
@@ -916,7 +916,7 @@ impl App {
                         ui,
                         "Scarica nuove voci Piper...",
                         theme::PRIMARY,
-                        Color32::WHITE,
+                        theme::ON_COLOR,
                         true,
                         32.0,
                     )
@@ -997,7 +997,7 @@ impl App {
                 ui,
                 "Carica TXT/DOCX",
                 theme::PRIMARY,
-                Color32::WHITE,
+                theme::ON_COLOR,
                 true,
                 34.0,
             )
@@ -1010,7 +1010,7 @@ impl App {
                 ui,
                 "Cancella Testo",
                 theme::ERROR,
-                Color32::WHITE,
+                theme::ON_COLOR,
                 true,
                 34.0,
             )
@@ -1105,7 +1105,7 @@ impl App {
                 ui,
                 gen_label,
                 theme::PRIMARY,
-                Color32::WHITE,
+                theme::ON_COLOR,
                 !self.generating,
                 44.0,
             )
@@ -1117,7 +1117,7 @@ impl App {
                 ui,
                 "✖ ANNULLA",
                 theme::ERROR,
-                Color32::WHITE,
+                theme::ON_COLOR,
                 self.generating,
                 44.0,
             )
@@ -1177,7 +1177,7 @@ impl App {
                     &mut cols[0],
                     play_label,
                     theme::PRIMARY,
-                    Color32::WHITE,
+                    theme::ON_COLOR,
                     play_enabled,
                     34.0,
                 )
@@ -1189,7 +1189,7 @@ impl App {
                     &mut cols[1],
                     "⏸ Pausa",
                     theme::PRIMARY,
-                    Color32::WHITE,
+                    theme::ON_COLOR,
                     self.player.is_playing,
                     34.0,
                 )
@@ -1207,7 +1207,7 @@ impl App {
                     &mut cols[2],
                     "⏹ Stop",
                     theme::ERROR,
-                    Color32::WHITE,
+                    theme::ON_COLOR,
                     self.player.is_playing,
                     34.0,
                 )
@@ -1411,8 +1411,15 @@ impl App {
                 ui.label(RichText::new(status).strong());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if Self::big_button(ui, "⏹ Stop", theme::ERROR, Color32::WHITE, !finished, 32.0)
-                        .clicked()
+                    if Self::big_button(
+                        ui,
+                        "⏹ Stop",
+                        theme::ERROR,
+                        theme::ON_COLOR,
+                        !finished,
+                        32.0,
+                    )
+                    .clicked()
                     {
                         stop.store(true, Ordering::SeqCst);
                     }

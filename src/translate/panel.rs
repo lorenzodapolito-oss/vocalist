@@ -257,7 +257,7 @@ impl TranslatePanel {
                     let b = egui::Button::new(
                         RichText::new("Traduci")
                             .strong()
-                            .color(egui::Color32::WHITE),
+                            .color(crate::theme::ON_COLOR),
                     )
                     .fill(theme::PRIMARY)
                     .min_size(egui::vec2(120.0, 30.0));
